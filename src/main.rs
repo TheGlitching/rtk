@@ -44,6 +44,7 @@ mod read;
 mod rewrite_cmd;
 mod ruff_cmd;
 mod runner;
+mod sqlfluff_cmd;
 mod summary;
 mod tee;
 mod telemetry;
@@ -555,6 +556,13 @@ enum Commands {
     /// Ruff linter/formatter with compact output
     Ruff {
         /// Ruff arguments (e.g., check, format --check)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
+    /// SQLFluff SQL linter with compact output
+    Sqlfluff {
+        /// SQLFluff arguments (e.g., lint models/, fix models/staging/)
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -1656,6 +1664,10 @@ fn main() -> Result<()> {
 
         Commands::Ruff { args } => {
             ruff_cmd::run(&args, cli.verbose)?;
+        }
+
+        Commands::Sqlfluff { args } => {
+            sqlfluff_cmd::run(&args, cli.verbose)?;
         }
 
         Commands::Pytest { args } => {

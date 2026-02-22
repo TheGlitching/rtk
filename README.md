@@ -175,6 +175,7 @@ rtk pytest                       # Python tests (failures only, 90% reduction)
 rtk pip list                     # Python packages (auto-detect uv, 70% reduction)
 rtk go test                      # Go tests (NDJSON, 90% reduction)
 rtk golangci-lint run            # Go linting (JSON, 85% reduction)
+rtk sqlfluff lint                # SQL linting (JSON, 75% reduction)
 ```
 
 ### Data & Analytics
@@ -276,6 +277,7 @@ rtk pytest                       # Test failures with state machine parser (90% 
 rtk pip list                     # Package list (auto-detect uv, 70% reduction)
 rtk pip install <package>        # Install with compact output
 rtk pip outdated                 # Outdated packages (85% reduction)
+rtk sqlfluff lint                # SQL linter, group violations by rule/file (75% reduction)
 
 # Go
 rtk go test                      # NDJSON streaming parser (90% reduction)
@@ -637,6 +639,7 @@ The hook is included in this repository at `.claude/hooks/rtk-rewrite.sh`. To us
 | `pip list/install/outdated` | `rtk pip ...` |
 | `go test/build/vet` | `rtk go ...` |
 | `golangci-lint run` | `rtk golangci-lint run` |
+| `sqlfluff lint` | `rtk sqlfluff lint` |
 | `docker ps/images/logs` | `rtk docker ...` |
 | `kubectl get/logs` | `rtk kubectl ...` |
 | `curl` | `rtk curl` |
