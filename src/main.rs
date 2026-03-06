@@ -19,6 +19,7 @@ mod git;
 mod go_cmd;
 mod golangci_cmd;
 mod grep_cmd;
+mod gt_cmd;
 mod hook_audit_cmd;
 mod hook_check;
 mod init;
@@ -594,6 +595,12 @@ enum Commands {
         command: GoCommands,
     },
 
+    /// Graphite (gt) stacked PR commands with compact output
+    Gt {
+        #[command(subcommand)]
+        command: GtCommands,
+    },
+
     /// golangci-lint with compact output
     #[command(name = "golangci-lint")]
     GolangciLint {
@@ -995,6 +1002,43 @@ fn run_fallback(parse_error: clap::Error) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[derive(Subcommand)]
+enum GtCommands {
+    /// Compact stack log output
+    Log {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Compact submit output
+    Submit {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Compact sync output
+    Sync {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Compact restack output
+    Restack {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Compact create output
+    Create {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Branch info and management
+    Branch {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Passthrough: git-passthrough detection or direct gt execution
+    #[command(external_subcommand)]
+    Other(Vec<OsString>),
 }
 
 fn main() -> Result<()> {
@@ -1697,6 +1741,30 @@ fn main() -> Result<()> {
             }
         },
 
+        Commands::Gt { command } => match command {
+            GtCommands::Log { args } => {
+                gt_cmd::run_log(&args, cli.verbose)?;
+            }
+            GtCommands::Submit { args } => {
+                gt_cmd::run_submit(&args, cli.verbose)?;
+            }
+            GtCommands::Sync { args } => {
+                gt_cmd::run_sync(&args, cli.verbose)?;
+            }
+            GtCommands::Restack { args } => {
+                gt_cmd::run_restack(&args, cli.verbose)?;
+            }
+            GtCommands::Create { args } => {
+                gt_cmd::run_create(&args, cli.verbose)?;
+            }
+            GtCommands::Branch { args } => {
+                gt_cmd::run_branch(&args, cli.verbose)?;
+            }
+            GtCommands::Other(args) => {
+                gt_cmd::run_other(&args, cli.verbose)?;
+            }
+        },
+
         Commands::GolangciLint { args } => {
             golangci_cmd::run(&args, cli.verbose)?;
         }
@@ -1710,7 +1778,9 @@ fn main() -> Result<()> {
         }
 
         Commands::Proxy { args } => {
-            use std::process::Command;
+            use std::io::{Read, Write};
+            use std::process::{Command, Stdio};
+            use std::thread;
 
             if args.is_empty() {
                 anyhow::bail!(
@@ -1730,18 +1800,74 @@ fn main() -> Result<()> {
                 eprintln!("Proxy mode: {} {}", cmd_name, cmd_args.join(" "));
             }
 
-            let output = Command::new(cmd_name.as_ref())
+            let mut child = Command::new(cmd_name.as_ref())
                 .args(&cmd_args)
-                .output()
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
                 .context(format!("Failed to execute command: {}", cmd_name))?;
 
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let full_output = format!("{}{}", stdout, stderr);
+            let stdout_pipe = child
+                .stdout
+                .take()
+                .context("Failed to capture child stdout")?;
+            let stderr_pipe = child
+                .stderr
+                .take()
+                .context("Failed to capture child stderr")?;
 
-            // Print output
-            print!("{}", stdout);
-            eprint!("{}", stderr);
+            let stdout_handle = thread::spawn(move || -> std::io::Result<Vec<u8>> {
+                let mut reader = stdout_pipe;
+                let mut captured = Vec::new();
+                let mut buf = [0u8; 8192];
+
+                loop {
+                    let count = reader.read(&mut buf)?;
+                    if count == 0 {
+                        break;
+                    }
+                    captured.extend_from_slice(&buf[..count]);
+                    let mut out = std::io::stdout().lock();
+                    out.write_all(&buf[..count])?;
+                    out.flush()?;
+                }
+
+                Ok(captured)
+            });
+
+            let stderr_handle = thread::spawn(move || -> std::io::Result<Vec<u8>> {
+                let mut reader = stderr_pipe;
+                let mut captured = Vec::new();
+                let mut buf = [0u8; 8192];
+
+                loop {
+                    let count = reader.read(&mut buf)?;
+                    if count == 0 {
+                        break;
+                    }
+                    captured.extend_from_slice(&buf[..count]);
+                    let mut err = std::io::stderr().lock();
+                    err.write_all(&buf[..count])?;
+                    err.flush()?;
+                }
+
+                Ok(captured)
+            });
+
+            let status = child
+                .wait()
+                .context(format!("Failed waiting for command: {}", cmd_name))?;
+
+            let stdout_bytes = stdout_handle
+                .join()
+                .map_err(|_| anyhow::anyhow!("stdout streaming thread panicked"))??;
+            let stderr_bytes = stderr_handle
+                .join()
+                .map_err(|_| anyhow::anyhow!("stderr streaming thread panicked"))??;
+
+            let stdout = String::from_utf8_lossy(&stdout_bytes);
+            let stderr = String::from_utf8_lossy(&stderr_bytes);
+            let full_output = format!("{}{}", stdout, stderr);
 
             // Track usage (input = output since no filtering)
             timer.track(
@@ -1752,8 +1878,8 @@ fn main() -> Result<()> {
             );
 
             // Exit with same code as child process
-            if !output.status.success() {
-                std::process::exit(output.status.code().unwrap_or(1));
+            if !status.success() {
+                std::process::exit(status.code().unwrap_or(1));
             }
         }
 
@@ -1814,6 +1940,7 @@ fn is_operational_command(cmd: &Commands) -> bool {
             | Commands::Pip { .. }
             | Commands::Go { .. }
             | Commands::GolangciLint { .. }
+            | Commands::Gt { .. }
     )
 }
 
@@ -1984,9 +2111,19 @@ mod tests {
 
     #[test]
     fn test_try_parse_git_with_dash_c_succeeds() {
-        // git -C /path status is now supported via global options
         let result = Cli::try_parse_from(["rtk", "git", "-C", "/path", "status"]);
-        assert!(result.is_ok(), "git -C should parse successfully");
+        assert!(
+            result.is_ok(),
+            "git -C /path status should parse successfully"
+        );
+        if let Ok(cli) = result {
+            match cli.command {
+                Commands::Git { directory, .. } => {
+                    assert_eq!(directory, vec!["/path"]);
+                }
+                _ => panic!("Expected Git command"),
+            }
+        }
     }
 
     #[test]
